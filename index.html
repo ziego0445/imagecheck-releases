@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+<title>지에고 매크로 - 승인 관리</title>
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #f4f5f7;
+    --card: #ffffff;
+    --border: #e2e4e9;
+    --text: #1a1b1e;
+    --muted: #6b7280;
+    --accent: #2563eb;
+    --approve: #16a34a;
+    --deny: #dc2626;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, "Segoe UI", "Malgun Gothic", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    padding: 16px;
+    padding-bottom: 60px;
+  }
+  h1 {
+    font-size: 20px;
+    margin: 4px 0 16px;
+  }
+  .topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 16px;
+  }
+  .userinfo {
+    font-size: 13px;
+    color: var(--muted);
+  }
+  button {
+    font: inherit;
+    border: none;
+    border-radius: 10px;
+    padding: 10px 16px;
+    cursor: pointer;
+  }
+  #signInBtn {
+    background: var(--accent);
+    color: white;
+    font-size: 16px;
+    padding: 14px 20px;
+    width: 100%;
+  }
+  #signOutBtn, #refreshBtn {
+    background: #e5e7eb;
+    color: var(--text);
+    font-size: 13px;
+    padding: 8px 12px;
+  }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 14px 16px;
+    margin-bottom: 12px;
+  }
+  .card .email {
+    font-weight: 600;
+    font-size: 16px;
+    word-break: break-all;
+  }
+  .card .meta {
+    color: var(--muted);
+    font-size: 12px;
+    margin-top: 2px;
+  }
+  .card .actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+  }
+  .card .actions button {
+    flex: 1;
+    font-size: 15px;
+    padding: 12px 0;
+  }
+  .btn-approve { background: var(--approve); color: white; }
+  .btn-deny { background: var(--deny); color: white; }
+  .empty, .msg {
+    color: var(--muted);
+    text-align: center;
+    padding: 32px 16px;
+    font-size: 14px;
+  }
+  .msg.error { color: var(--deny); }
+  #app { display: none; }
+</style>
+</head>
+<body>
+  <h1>지에고 매크로 - 승인 대기 목록</h1>
+
+  <button id="signInBtn">Google로 로그인</button>
+
+  <div id="app">
+    <div class="topbar">
+      <span class="userinfo" id="userinfo"></span>
+      <div>
+        <button id="refreshBtn">새로고침</button>
+        <button id="signOutBtn">로그아웃</button>
+      </div>
+    </div>
+    <div id="list"></div>
+  </div>
+
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
+  import {
+    getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged
+  } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js";
+  import {
+    getDatabase, ref, get, update
+  } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-database.js";
+
+  // 이 값들은 Firebase Web config로, 원래 공개돼도 되는 값입니다(보안은 Database Rules가 담당).
+  const firebaseConfig = {
+    apiKey: "AIzaSyCMcu6DGP4FBkrU3qIGbe3FyoVtsNe_vhk",
+    authDomain: "ziegoimagecheck.firebaseapp.com",
+    databaseURL: "https://ziegoimagecheck-default-rtdb.firebaseio.com",
+    projectId: "ziegoimagecheck",
+  };
+
+  const app = initializeApp(firebaseConfig);
+  const auth = getAuth(app);
+  const db = getDatabase(app);
+
+  const signInBtn = document.getElementById("signInBtn");
+  const signOutBtn = document.getElementById("signOutBtn");
+  const refreshBtn = document.getElementById("refreshBtn");
+  const appEl = document.getElementById("app");
+  const userinfoEl = document.getElementById("userinfo");
+  const listEl = document.getElementById("list");
+
+  signInBtn.addEventListener("click", () => {
+    signInWithPopup(auth, new GoogleAuthProvider()).catch((err) => {
+      alert("로그인 실패: " + err.message);
+    });
+  });
+
+  signOutBtn.addEventListener("click", () => signOut(auth));
+  refreshBtn.addEventListener("click", () => loadPending());
+
+  onAuthStateChanged(auth, (user) => {
+    if (user) {
+      signInBtn.style.display = "none";
+      appEl.style.display = "block";
+      userinfoEl.textContent = user.email;
+      loadPending();
+    } else {
+      signInBtn.style.display = "block";
+      appEl.style.display = "none";
+    }
+  });
+
+  function formatTime(ms) {
+    if (!ms) return "";
+    const d = new Date(ms);
+    return d.toLocaleString("ko-KR");
+  }
+
+  async function loadPending() {
+    listEl.innerHTML = '<div class="msg">불러오는 중...</div>';
+    try {
+      const snap = await get(ref(db, "license"));
+      const data = snap.val() || {};
+      const pending = Object.entries(data)
+        .filter(([, v]) => v && v.status === "pending")
+        .sort((a, b) => (a[1].requestedAt || 0) - (b[1].requestedAt || 0));
+
+      if (pending.length === 0) {
+        listEl.innerHTML = '<div class="empty">대기중인 요청이 없습니다.</div>';
+        return;
+      }
+
+      listEl.innerHTML = "";
+      for (const [key, item] of pending) {
+        const card = document.createElement("div");
+        card.className = "card";
+        card.innerHTML = `
+          <div class="email">${escapeHtml(item.email || key)}</div>
+          <div class="meta">신청: ${formatTime(item.requestedAt)}</div>
+          <div class="actions">
+            <button class="btn-approve">승인</button>
+            <button class="btn-deny">거부</button>
+          </div>
+        `;
+        card.querySelector(".btn-approve").addEventListener("click", () => setStatus(key, "approved", card));
+        card.querySelector(".btn-deny").addEventListener("click", () => setStatus(key, "denied", card));
+        listEl.appendChild(card);
+      }
+    } catch (err) {
+      listEl.innerHTML = `<div class="msg error">불러오기 실패: ${escapeHtml(err.message)}<br>(관리자 계정으로 로그인했는지 확인해주세요)</div>`;
+    }
+  }
+
+  async function setStatus(key, status, card) {
+    card.querySelectorAll("button").forEach((b) => (b.disabled = true));
+    try {
+      await update(ref(db, "license/" + key), {
+        status,
+        approvedAt: Date.now(),
+      });
+      card.remove();
+      if (!listEl.querySelector(".card")) {
+        listEl.innerHTML = '<div class="empty">대기중인 요청이 없습니다.</div>';
+      }
+    } catch (err) {
+      alert("처리 실패: " + err.message);
+      card.querySelectorAll("button").forEach((b) => (b.disabled = false));
+    }
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+    }[c]));
+  }
+</script>
+</body>
+</html>
